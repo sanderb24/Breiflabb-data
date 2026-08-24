@@ -2,22 +2,26 @@ import csv
 import io
 import urllib.request
 import zipfile
-from collections import Counter
 from datetime import datetime
 
 YEAR = datetime.now().year
 URL = f"https://register.fiskeridir.no/uttrekk/fangstdata_{YEAR}.csv.zip"
 OUTPUT = "breiflabb_latest.csv"
 
+# Vi bruker fartøynavn som hovedidentifikasjon.
+# "Junior" må i tillegg ha korrekt registreringsmerke,
+# fordi flere forskjellige fartøy heter Junior.
 FARTOY = {
-    ("øyavåg", "ST0122F"): ("Øyavåg", "ST-122-F"),
-    ("egil junior", "TR0090F"): ("Egil Junior", "TR-90-F"),
-    ("frøyfisk", "ST0023F"): ("Frøyfisk", "ST-23-F"),
-    ("mercur", "TR0011F"): ("Mercur", "TR-11-F"),
-    ("sjøsvanen", "TR0047F"): ("Sjøsvanen", "TR-47-F"),
-    ("junior", "TR0195F"): ("Junior", "TR-195-F"),
-    ("frøymann", "TR0048F"): ("Frøymann", "TR-48-F"),
+    "øyavåg": ("Øyavåg", "ST-122-F"),
+    "egil junior": ("Egil Junior", "TR-90-F"),
+    "frøyfisk": ("Frøyfisk", "ST-23-F"),
+    "mercur": ("Mercur", "TR-11-F"),
+    "sjøsvanen": ("Sjøsvanen", "TR-47-F"),
+    "junior": ("Junior", "TR-195-F"),
+    "frøymann": ("Frøymann", "TR-48-F"),
 }
+
+JUNIOR_RAA_MERKE = "TR0195F"
 
 ALIASES = {
     "dokumenttype_kode": [
@@ -100,6 +104,7 @@ def finn_kolonne(headers, alternativer, valgfri=False):
 
     for navn in alternativer:
         key = normaliser(navn).casefold()
+
         if key in oppslag:
             return oppslag[key]
 
@@ -107,9 +112,7 @@ def finn_kolonne(headers, alternativer, valgfri=False):
         return None
 
     raise RuntimeError(
-        f"Fant ikke nødvendig kolonne. "
-        f"Prøvde {alternativer}. "
-        f"Kolonnene i filen er: {headers}"
+        f"Fant ikke nødvendig kolonne. Prøvde: {alternativer}"
     )
 
 
@@ -126,6 +129,7 @@ def til_tall(verdi):
 
     if "," in s and "." not in s:
         s = s.replace(",", ".")
+
     elif "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
 
@@ -134,7 +138,11 @@ def til_tall(verdi):
 
 def til_versjon(verdi):
     try:
-        return int(float((verdi or "0").replace(",", ".")))
+        return int(
+            float(
+                (verdi or "0").replace(",", ".")
+            )
+        )
     except Exception:
         return 0
 
@@ -144,10 +152,14 @@ def er_sluttseddel(row, kodekolonne, navnkolonne):
     navn = ""
 
     if kodekolonne:
-        kode = normaliser(row.get(kodekolonne, ""))
+        kode = normaliser(
+            row.get(kodekolonne, "")
+        )
 
     if navnkolonne:
-        navn = normaliser(row.get(navnkolonne, ""))
+        navn = normaliser(
+            row.get(navnkolonne, "")
+        )
 
     kode = kode.replace(",", ".")
 
@@ -164,22 +176,35 @@ print("Laster ned:", URL)
 
 req = urllib.request.Request(
     URL,
-    headers={"User-Agent": "Mozilla/5.0 breiflabb-data"}
+    headers={
+        "User-Agent": "Mozilla/5.0 breiflabb-data"
+    }
 )
 
-with urllib.request.urlopen(req, timeout=180) as response:
+with urllib.request.urlopen(
+    req,
+    timeout=180
+) as response:
     zip_data = response.read()
 
-with zipfile.ZipFile(io.BytesIO(zip_data)) as z:
+
+with zipfile.ZipFile(
+    io.BytesIO(zip_data)
+) as z:
+
     csv_files = [
-        navn for navn in z.namelist()
+        navn
+        for navn in z.namelist()
         if navn.lower().endswith(".csv")
     ]
 
     if not csv_files:
-        raise RuntimeError("Fant ingen CSV-fil i ZIP-filen")
+        raise RuntimeError(
+            "Fant ingen CSV-fil i ZIP-filen"
+        )
 
     with z.open(csv_files[0]) as f:
+
         text = io.TextIOWrapper(
             f,
             encoding="utf-8-sig",
@@ -240,18 +265,24 @@ with zipfile.ZipFile(io.BytesIO(zip_data)) as z:
         }
 
         siste = {}
-        treff = Counter()
+
+        antall_breiflabb = 0
+        antall_sluttseddel = 0
+        antall_valgte = 0
 
         for row in reader:
 
             art = normaliser(
-                row.get(kol["art"], "")
+                row.get(
+                    kol["art"],
+                    ""
+                )
             )
 
             if art.casefold() != "breiflabb":
                 continue
 
-            treff["breiflabb"] += 1
+            antall_breiflabb += 1
 
             if not er_sluttseddel(
                 row,
@@ -260,65 +291,123 @@ with zipfile.ZipFile(io.BytesIO(zip_data)) as z:
             ):
                 continue
 
-            treff["sluttseddel"] += 1
+            antall_sluttseddel += 1
+
 
             navn_raw = normaliser(
-                row.get(kol["fartoynavn"], "")
+                row.get(
+                    kol["fartoynavn"],
+                    ""
+                )
             )
 
-            merke_raw = normaliser_merke(
-                row.get(kol["fartoymerke"], "")
-            )
+            navn_key = navn_raw.casefold()
 
-            nokkel = (
-                navn_raw.casefold(),
-                merke_raw
-            )
-
-            if nokkel not in FARTOY:
+            if navn_key not in FARTOY:
                 continue
 
-            treff["valgte_fartoy"] += 1
 
-            visningsnavn, visningsmerke = FARTOY[nokkel]
+            merke_raw = normaliser_merke(
+                row.get(
+                    kol["fartoymerke"],
+                    ""
+                )
+            )
+
+
+            # Flere fartøy heter "Junior".
+            # Kun TR-195-F skal tas med.
+            if (
+                navn_key == "junior"
+                and merke_raw != JUNIOR_RAA_MERKE
+            ):
+                continue
+
+
+            visningsnavn, visningsmerke = (
+                FARTOY[navn_key]
+            )
+
+            antall_valgte += 1
+
 
             dokumentnummer = normaliser(
-                row.get(kol["dokumentnummer"], "")
+                row.get(
+                    kol["dokumentnummer"],
+                    ""
+                )
             )
 
             linjenummer = normaliser(
-                row.get(kol["linjenummer"], "")
+                row.get(
+                    kol["linjenummer"],
+                    ""
+                )
             )
 
-            if not dokumentnummer or not linjenummer:
+            if not dokumentnummer:
                 continue
+
+            if not linjenummer:
+                continue
+
+
+            versjon = 0
 
             if kol["versjon"]:
                 versjon = til_versjon(
-                    row.get(kol["versjon"], "")
+                    row.get(
+                        kol["versjon"],
+                        ""
+                    )
                 )
-            else:
-                versjon = 0
+
 
             rundvekt = til_tall(
-                row.get(kol["rundvekt"], "")
+                row.get(
+                    kol["rundvekt"],
+                    ""
+                )
             )
+
 
             landingsdato = normaliser(
-                row.get(kol["landingsdato"], "")
+                row.get(
+                    kol["landingsdato"],
+                    ""
+                )
             )
 
+
             data = {
-                "Dokumentnummer": dokumentnummer,
-                "Linjenummer": linjenummer,
-                "Dokumentversjon": versjon,
-                "Landingsdato": landingsdato,
-                "Fartøynavn": visningsnavn,
-                "Fartøymerke": visningsmerke,
-                "Art": "Breiflabb",
-                "Rundvekt": rundvekt,
-                "Halevekt": rundvekt / 2.8,
+                "Dokumentnummer":
+                    dokumentnummer,
+
+                "Linjenummer":
+                    linjenummer,
+
+                "Dokumentversjon":
+                    versjon,
+
+                "Landingsdato":
+                    landingsdato,
+
+                "Fartøynavn":
+                    visningsnavn,
+
+                "Fartøymerke":
+                    visningsmerke,
+
+                "Art":
+                    "Breiflabb",
+
+                "Rundvekt":
+                    rundvekt,
+
+                "Halevekt":
+                    rundvekt / 2.8,
             }
+
 
             key = (
                 dokumentnummer,
@@ -329,27 +418,44 @@ with zipfile.ZipFile(io.BytesIO(zip_data)) as z:
 
             if (
                 gammel is None
-                or versjon >= gammel["Dokumentversjon"]
+                or
+                versjon >=
+                gammel["Dokumentversjon"]
             ):
                 siste[key] = data
 
 
-rader = list(siste.values())
+rader = list(
+    siste.values()
+)
+
 
 if not rader:
     raise RuntimeError(
         "Ingen gyldige rader funnet. "
-        "Eksisterende CSV blir ikke overskrevet."
+        "CSV blir ikke overskrevet."
     )
+
+
+def dato_sort(rad):
+    try:
+        return datetime.strptime(
+            rad["Landingsdato"],
+            "%d.%m.%Y"
+        )
+    except Exception:
+        return datetime.min
+
 
 rader.sort(
     key=lambda r: (
-        r["Landingsdato"],
+        dato_sort(r),
         r["Fartøynavn"],
         r["Dokumentnummer"],
         r["Linjenummer"],
     )
 )
+
 
 felter = [
     "Dokumentnummer",
@@ -362,6 +468,7 @@ felter = [
     "Rundvekt",
     "Halevekt",
 ]
+
 
 with open(
     OUTPUT,
@@ -379,6 +486,7 @@ with open(
     writer.writeheader()
 
     for rad in rader:
+
         ut = dict(rad)
 
         ut["Rundvekt"] = (
@@ -393,8 +501,9 @@ with open(
 
         writer.writerow(ut)
 
+
 print("Ferdig")
-print("Breiflabb:", treff["breiflabb"])
-print("Sluttsedler:", treff["sluttseddel"])
-print("Valgte fartøy:", treff["valgte_fartoy"])
+print("Breiflabb:", antall_breiflabb)
+print("Sluttsedler:", antall_sluttseddel)
+print("Valgte fartøy:", antall_valgte)
 print("Eksporterte linjer:", len(rader))
