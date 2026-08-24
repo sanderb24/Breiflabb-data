@@ -10,13 +10,13 @@ URL = f"https://register.fiskeridir.no/uttrekk/fangstdata_{YEAR}.csv.zip"
 OUTPUT = "breiflabb_latest.csv"
 
 FARTOY = {
-    "øyavåg": "Øyavåg",
-    "egil junior": "Egil Junior",
-    "frøyfisk": "Frøyfisk",
-    "mercur": "Mercur",
-    "sjøsvanen": "Sjøsvanen",
-    "junior": "Junior",
-    "frøymann": "Frøymann",
+    ("øyavåg", "ST0122F"): ("Øyavåg", "ST-122-F"),
+    ("egil junior", "TR0090F"): ("Egil Junior", "TR-90-F"),
+    ("frøyfisk", "ST0023F"): ("Frøyfisk", "ST-23-F"),
+    ("mercur", "TR0011F"): ("Mercur", "TR-11-F"),
+    ("sjøsvanen", "TR0047F"): ("Sjøsvanen", "TR-47-F"),
+    ("junior", "TR0195F"): ("Junior", "TR-195-F"),
+    ("frøymann", "TR0048F"): ("Frøymann", "TR-48-F"),
 }
 
 ALIASES = {
@@ -83,6 +83,15 @@ def normaliser(verdi):
     )
 
 
+def normaliser_merke(verdi):
+    return (
+        normaliser(verdi)
+        .upper()
+        .replace("-", "")
+        .replace(" ", "")
+    )
+
+
 def finn_kolonne(headers, alternativer, valgfri=False):
     oppslag = {
         normaliser(h).casefold(): h
@@ -140,9 +149,9 @@ def er_sluttseddel(row, kodekolonne, navnkolonne):
     if navnkolonne:
         navn = normaliser(row.get(navnkolonne, ""))
 
-    kode_normalisert = kode.replace(",", ".").strip()
+    kode = kode.replace(",", ".")
 
-    if kode_normalisert in {"0", "0.0", "00"}:
+    if kode in {"0", "0.0", "00"}:
         return True
 
     if navn.casefold() == "sluttseddeldokument":
@@ -155,44 +164,22 @@ print("Laster ned:", URL)
 
 req = urllib.request.Request(
     URL,
-    headers={
-        "User-Agent": "Mozilla/5.0 breiflabb-data"
-    }
+    headers={"User-Agent": "Mozilla/5.0 breiflabb-data"}
 )
 
-with urllib.request.urlopen(
-    req,
-    timeout=180
-) as response:
+with urllib.request.urlopen(req, timeout=180) as response:
     zip_data = response.read()
 
-print(
-    "Nedlasting ferdig:",
-    len(zip_data),
-    "bytes"
-)
-
-with zipfile.ZipFile(
-    io.BytesIO(zip_data)
-) as z:
-
+with zipfile.ZipFile(io.BytesIO(zip_data)) as z:
     csv_files = [
-        navn
-        for navn in z.namelist()
+        navn for navn in z.namelist()
         if navn.lower().endswith(".csv")
     ]
 
     if not csv_files:
-        raise RuntimeError(
-            "Fant ingen CSV-fil i ZIP-filen"
-        )
+        raise RuntimeError("Fant ingen CSV-fil i ZIP-filen")
 
-    csv_name = csv_files[0]
-
-    print("Leser:", csv_name)
-
-    with z.open(csv_name) as f:
-
+    with z.open(csv_files[0]) as f:
         text = io.TextIOWrapper(
             f,
             encoding="utf-8-sig",
@@ -248,67 +235,23 @@ with zipfile.ZipFile(
             ),
             "fartoymerke": finn_kolonne(
                 headers,
-                ALIASES["fartoymerke"],
-                valgfri=True
+                ALIASES["fartoymerke"]
             ),
         }
 
-        print("Kolonner brukt:")
-        for navn, kolonnenavn in kol.items():
-            print(f"  {navn}: {kolonnenavn}")
-
-        if not kol["dokumenttype_kode"] and not kol["dokumenttype_navn"]:
-            raise RuntimeError(
-                "Fant verken dokumenttypekode eller dokumenttypenavn."
-            )
-
-        total = 0
-        breiflabb_treff = 0
-        sluttseddel_treff = 0
-        fartoy_treff = 0
-
-        dokumenttyper = Counter()
-        fartoynavn_funnet = Counter()
-
         siste = {}
+        treff = Counter()
 
         for row in reader:
-            total += 1
 
             art = normaliser(
-                row.get(
-                    kol["art"],
-                    ""
-                )
+                row.get(kol["art"], "")
             )
 
             if art.casefold() != "breiflabb":
                 continue
 
-            breiflabb_treff += 1
-
-            kodeverdi = ""
-            navnverdi = ""
-
-            if kol["dokumenttype_kode"]:
-                kodeverdi = normaliser(
-                    row.get(
-                        kol["dokumenttype_kode"],
-                        ""
-                    )
-                )
-
-            if kol["dokumenttype_navn"]:
-                navnverdi = normaliser(
-                    row.get(
-                        kol["dokumenttype_navn"],
-                        ""
-                    )
-                )
-
-            dokumenttyper[
-                f"kode={kodeverdi!r}, navn={navnverdi!r}"
-            ] += 1
+            treff["breiflabb"] += 1
 
             if not er_sluttseddel(
                 row,
@@ -317,36 +260,34 @@ with zipfile.ZipFile(
             ):
                 continue
 
-            sluttseddel_treff += 1
+            treff["sluttseddel"] += 1
 
-            fartoynavn_raw = normaliser(
-                row.get(
-                    kol["fartoynavn"],
-                    ""
-                )
+            navn_raw = normaliser(
+                row.get(kol["fartoynavn"], "")
             )
 
-            fartoynavn_nokkel = fartoynavn_raw.casefold()
+            merke_raw = normaliser_merke(
+                row.get(kol["fartoymerke"], "")
+            )
 
-            fartoynavn_funnet[fartoynavn_raw] += 1
+            nokkel = (
+                navn_raw.casefold(),
+                merke_raw
+            )
 
-            if fartoynavn_nokkel not in FARTOY:
+            if nokkel not in FARTOY:
                 continue
 
-            fartoy_treff += 1
+            treff["valgte_fartoy"] += 1
+
+            visningsnavn, visningsmerke = FARTOY[nokkel]
 
             dokumentnummer = normaliser(
-                row.get(
-                    kol["dokumentnummer"],
-                    ""
-                )
+                row.get(kol["dokumentnummer"], "")
             )
 
             linjenummer = normaliser(
-                row.get(
-                    kol["linjenummer"],
-                    ""
-                )
+                row.get(kol["linjenummer"], "")
             )
 
             if not dokumentnummer or not linjenummer:
@@ -354,45 +295,26 @@ with zipfile.ZipFile(
 
             if kol["versjon"]:
                 versjon = til_versjon(
-                    row.get(
-                        kol["versjon"],
-                        ""
-                    )
+                    row.get(kol["versjon"], "")
                 )
             else:
                 versjon = 0
 
             rundvekt = til_tall(
-                row.get(
-                    kol["rundvekt"],
-                    ""
-                )
+                row.get(kol["rundvekt"], "")
             )
 
             landingsdato = normaliser(
-                row.get(
-                    kol["landingsdato"],
-                    ""
-                )
+                row.get(kol["landingsdato"], "")
             )
-
-            fartoymerke = ""
-
-            if kol["fartoymerke"]:
-                fartoymerke = normaliser(
-                    row.get(
-                        kol["fartoymerke"],
-                        ""
-                    )
-                )
 
             data = {
                 "Dokumentnummer": dokumentnummer,
                 "Linjenummer": linjenummer,
                 "Dokumentversjon": versjon,
                 "Landingsdato": landingsdato,
-                "Fartøynavn": FARTOY[fartoynavn_nokkel],
-                "Fartøymerke": fartoymerke,
+                "Fartøynavn": visningsnavn,
+                "Fartøymerke": visningsmerke,
                 "Art": "Breiflabb",
                 "Rundvekt": rundvekt,
                 "Halevekt": rundvekt / 2.8,
@@ -412,28 +334,13 @@ with zipfile.ZipFile(
                 siste[key] = data
 
 
-print()
-print("DIAGNOSTIKK")
-print("-----------")
-print("Totale rader:", total)
-print("Breiflabb-rader:", breiflabb_treff)
-print("Sluttseddel-rader for Breiflabb:", sluttseddel_treff)
-print("Rader på valgte fartøy:", fartoy_treff)
+rader = list(siste.values())
 
-print()
-print("Dokumenttyper for Breiflabb:")
-for verdi, antall in dokumenttyper.most_common(20):
-    print(f"  {verdi}: {antall}")
-
-print()
-print("Fartøynavn etter Breiflabb + sluttseddel:")
-for navn, antall in fartoynavn_funnet.most_common(50):
-    print(f"  {navn!r}: {antall}")
-
-
-rader = list(
-    siste.values()
-)
+if not rader:
+    raise RuntimeError(
+        "Ingen gyldige rader funnet. "
+        "Eksisterende CSV blir ikke overskrevet."
+    )
 
 rader.sort(
     key=lambda r: (
@@ -443,30 +350,6 @@ rader.sort(
         r["Linjenummer"],
     )
 )
-
-
-if breiflabb_treff == 0:
-    raise RuntimeError(
-        "Fant ingen Breiflabb-rader."
-    )
-
-if sluttseddel_treff == 0:
-    raise RuntimeError(
-        "Fant Breiflabb, men ingen sluttsedler."
-    )
-
-if fartoy_treff == 0:
-    raise RuntimeError(
-        "Fant Breiflabb-sluttsedler, men ingen av de valgte fartøynavnene. "
-        "Kontroller fartøynavnene i loggen."
-    )
-
-if not rader:
-    raise RuntimeError(
-        "Ingen rader klare for eksport. "
-        "Eksisterende breiflabb_latest.csv blir derfor ikke overskrevet."
-    )
-
 
 felter = [
     "Dokumentnummer",
@@ -496,7 +379,6 @@ with open(
     writer.writeheader()
 
     for rad in rader:
-
         ut = dict(rad)
 
         ut["Rundvekt"] = (
@@ -511,24 +393,8 @@ with open(
 
         writer.writerow(ut)
 
-
-print()
-print(
-    f"Ferdig. Lagret {len(rader)} "
-    f"siste dokumentlinjer i {OUTPUT}"
-)
-
-print()
-print("Fordeling på fartøy:")
-
-fordeling = Counter(
-    r["Fartøynavn"]
-    for r in rader
-)
-
-for fartoy, antall in sorted(
-    fordeling.items()
-):
-    print(
-        f"  {fartoy}: {antall} linjer"
-    )
+print("Ferdig")
+print("Breiflabb:", treff["breiflabb"])
+print("Sluttsedler:", treff["sluttseddel"])
+print("Valgte fartøy:", treff["valgte_fartoy"])
+print("Eksporterte linjer:", len(rader))
