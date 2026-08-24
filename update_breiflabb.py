@@ -8,9 +8,6 @@ YEAR = datetime.now().year
 URL = f"https://register.fiskeridir.no/uttrekk/fangstdata_{YEAR}.csv.zip"
 OUTPUT = "breiflabb_latest.csv"
 
-# Vi bruker fartøynavn som hovedidentifikasjon.
-# "Junior" må i tillegg ha korrekt registreringsmerke,
-# fordi flere forskjellige fartøy heter Junior.
 FARTOY = {
     "øyavåg": ("Øyavåg", "ST-122-F"),
     "egil junior": ("Egil Junior", "TR-90-F"),
@@ -21,7 +18,13 @@ FARTOY = {
     "frøymann": ("Frøymann", "TR-48-F"),
 }
 
+# Sikre identifikatorer
 JUNIOR_RAA_MERKE = "TR0195F"
+EGIL_JUNIOR_KALLESIGNAL = "LH5006"
+EGIL_JUNIOR_MERKER = {
+    "TR0090F",
+    "T0090F",
+}
 
 ALIASES = {
     "dokumenttype_kode": [
@@ -73,6 +76,11 @@ ALIASES = {
         "Fartøy merke",
         "Registreringsmerke",
         "Merke",
+    ],
+    "radiokallesignal": [
+        "Radiokallesignal (seddel)",
+        "Radiokallesignal",
+        "Kallesignal",
     ],
 }
 
@@ -172,6 +180,52 @@ def er_sluttseddel(row, kodekolonne, navnkolonne):
     return False
 
 
+def identifiser_fartoy(navn_raw, merke_raw, kallesignal_raw):
+    navn_key = normaliser(navn_raw).casefold()
+    merke_key = normaliser_merke(merke_raw)
+    kallesignal = normaliser(kallesignal_raw).upper()
+
+    # --------------------------------------------------
+    # EGIL JUNIOR
+    # --------------------------------------------------
+    # Bruk flere mulige identifikatorer slik at han ikke
+    # forsvinner hvis fartøynavnet i råfila er skrevet
+    # annerledes.
+    if (
+        kallesignal == EGIL_JUNIOR_KALLESIGNAL
+        or merke_key in EGIL_JUNIOR_MERKER
+        or (
+            "egil" in navn_key
+            and "junior" in navn_key
+        )
+    ):
+        return (
+            "Egil Junior",
+            "TR-90-F"
+        )
+
+    # --------------------------------------------------
+    # JUNIOR
+    # --------------------------------------------------
+    # Det finnes flere båter som heter Junior.
+    if navn_key == "junior":
+        if merke_key == JUNIOR_RAA_MERKE:
+            return (
+                "Junior",
+                "TR-195-F"
+            )
+
+        return None
+
+    # --------------------------------------------------
+    # ØVRIGE FARTØY
+    # --------------------------------------------------
+    if navn_key in FARTOY:
+        return FARTOY[navn_key]
+
+    return None
+
+
 print("Laster ned:", URL)
 
 req = urllib.request.Request(
@@ -224,43 +278,58 @@ with zipfile.ZipFile(
                 ALIASES["dokumenttype_kode"],
                 valgfri=True
             ),
+
             "dokumenttype_navn": finn_kolonne(
                 headers,
                 ALIASES["dokumenttype_navn"],
                 valgfri=True
             ),
+
             "dokumentnummer": finn_kolonne(
                 headers,
                 ALIASES["dokumentnummer"]
             ),
+
             "linjenummer": finn_kolonne(
                 headers,
                 ALIASES["linjenummer"]
             ),
+
             "versjon": finn_kolonne(
                 headers,
                 ALIASES["versjon"],
                 valgfri=True
             ),
+
             "landingsdato": finn_kolonne(
                 headers,
                 ALIASES["landingsdato"]
             ),
+
             "art": finn_kolonne(
                 headers,
                 ALIASES["art"]
             ),
+
             "rundvekt": finn_kolonne(
                 headers,
                 ALIASES["rundvekt"]
             ),
+
             "fartoynavn": finn_kolonne(
                 headers,
                 ALIASES["fartoynavn"]
             ),
+
             "fartoymerke": finn_kolonne(
                 headers,
                 ALIASES["fartoymerke"]
+            ),
+
+            "radiokallesignal": finn_kolonne(
+                headers,
+                ALIASES["radiokallesignal"],
+                valgfri=True
             ),
         }
 
@@ -269,6 +338,7 @@ with zipfile.ZipFile(
         antall_breiflabb = 0
         antall_sluttseddel = 0
         antall_valgte = 0
+        egil_treff = 0
 
         for row in reader:
 
@@ -301,34 +371,40 @@ with zipfile.ZipFile(
                 )
             )
 
-            navn_key = navn_raw.casefold()
-
-            if navn_key not in FARTOY:
-                continue
-
-
-            merke_raw = normaliser_merke(
+            merke_raw = normaliser(
                 row.get(
                     kol["fartoymerke"],
                     ""
                 )
             )
 
+            kallesignal_raw = ""
 
-            # Flere fartøy heter "Junior".
-            # Kun TR-195-F skal tas med.
-            if (
-                navn_key == "junior"
-                and merke_raw != JUNIOR_RAA_MERKE
-            ):
+            if kol["radiokallesignal"]:
+                kallesignal_raw = normaliser(
+                    row.get(
+                        kol["radiokallesignal"],
+                        ""
+                    )
+                )
+
+
+            fartoy = identifiser_fartoy(
+                navn_raw,
+                merke_raw,
+                kallesignal_raw
+            )
+
+            if fartoy is None:
                 continue
 
 
-            visningsnavn, visningsmerke = (
-                FARTOY[navn_key]
-            )
+            visningsnavn, visningsmerke = fartoy
 
             antall_valgte += 1
+
+            if visningsnavn == "Egil Junior":
+                egil_treff += 1
 
 
             dokumentnummer = normaliser(
@@ -418,8 +494,7 @@ with zipfile.ZipFile(
 
             if (
                 gammel is None
-                or
-                versjon >=
+                or versjon >=
                 gammel["Dokumentversjon"]
             ):
                 siste[key] = data
@@ -502,8 +577,10 @@ with open(
         writer.writerow(ut)
 
 
-print("Ferdig")
+print()
+print("FERDIG")
 print("Breiflabb:", antall_breiflabb)
 print("Sluttsedler:", antall_sluttseddel)
 print("Valgte fartøy:", antall_valgte)
+print("Egil Junior-rader:", egil_treff)
 print("Eksporterte linjer:", len(rader))
