@@ -10,13 +10,13 @@ URL = f"https://register.fiskeridir.no/uttrekk/fangstdata_{YEAR}.csv.zip"
 OUTPUT = "breiflabb_latest.csv"
 
 FARTOY = {
-    "ST-122-F": "Øyavåg",
-    "TR-90-F": "Egil Junior",
-    "ST-23-F": "Frøyfisk",
-    "TR-11-F": "Mercur",
-    "TR-47-F": "Sjøsvanen",
-    "TR-195-F": "Junior",
-    "TR-48-F": "Frøymann",
+    "øyavåg": "Øyavåg",
+    "egil junior": "Egil Junior",
+    "frøyfisk": "Frøyfisk",
+    "mercur": "Mercur",
+    "sjøsvanen": "Sjøsvanen",
+    "junior": "Junior",
+    "frøymann": "Frøymann",
 }
 
 ALIASES = {
@@ -58,6 +58,10 @@ ALIASES = {
         "Rundvekt",
         "Rund vekt",
         "Rundvekt kg",
+    ],
+    "fartoynavn": [
+        "Fartøynavn",
+        "Fartøy navn",
     ],
     "fartoymerke": [
         "Registreringsmerke (seddel)",
@@ -238,9 +242,14 @@ with zipfile.ZipFile(
                 headers,
                 ALIASES["rundvekt"]
             ),
+            "fartoynavn": finn_kolonne(
+                headers,
+                ALIASES["fartoynavn"]
+            ),
             "fartoymerke": finn_kolonne(
                 headers,
-                ALIASES["fartoymerke"]
+                ALIASES["fartoymerke"],
+                valgfri=True
             ),
         }
 
@@ -258,9 +267,8 @@ with zipfile.ZipFile(
         sluttseddel_treff = 0
         fartoy_treff = 0
 
-        artverdier = Counter()
         dokumenttyper = Counter()
-        fartoymerker = Counter()
+        fartoynavn_funnet = Counter()
 
         siste = {}
 
@@ -273,8 +281,6 @@ with zipfile.ZipFile(
                     ""
                 )
             )
-
-            artverdier[art] += 1
 
             if art.casefold() != "breiflabb":
                 continue
@@ -313,16 +319,18 @@ with zipfile.ZipFile(
 
             sluttseddel_treff += 1
 
-            merke = normaliser(
+            fartoynavn_raw = normaliser(
                 row.get(
-                    kol["fartoymerke"],
+                    kol["fartoynavn"],
                     ""
                 )
-            ).upper()
+            )
 
-            fartoymerker[merke] += 1
+            fartoynavn_nokkel = fartoynavn_raw.casefold()
 
-            if merke not in FARTOY:
+            fartoynavn_funnet[fartoynavn_raw] += 1
+
+            if fartoynavn_nokkel not in FARTOY:
                 continue
 
             fartoy_treff += 1
@@ -341,10 +349,7 @@ with zipfile.ZipFile(
                 )
             )
 
-            if not dokumentnummer:
-                continue
-
-            if not linjenummer:
+            if not dokumentnummer or not linjenummer:
                 continue
 
             if kol["versjon"]:
@@ -371,13 +376,23 @@ with zipfile.ZipFile(
                 )
             )
 
+            fartoymerke = ""
+
+            if kol["fartoymerke"]:
+                fartoymerke = normaliser(
+                    row.get(
+                        kol["fartoymerke"],
+                        ""
+                    )
+                )
+
             data = {
                 "Dokumentnummer": dokumentnummer,
                 "Linjenummer": linjenummer,
                 "Dokumentversjon": versjon,
                 "Landingsdato": landingsdato,
-                "Fartøynavn": FARTOY[merke],
-                "Fartøymerke": merke,
+                "Fartøynavn": FARTOY[fartoynavn_nokkel],
+                "Fartøymerke": fartoymerke,
                 "Art": "Breiflabb",
                 "Rundvekt": rundvekt,
                 "Halevekt": rundvekt / 2.8,
@@ -411,9 +426,9 @@ for verdi, antall in dokumenttyper.most_common(20):
     print(f"  {verdi}: {antall}")
 
 print()
-print("Registreringsmerker etter Breiflabb + sluttseddel:")
-for merke, antall in fartoymerker.most_common(30):
-    print(f"  {merke!r}: {antall}")
+print("Fartøynavn etter Breiflabb + sluttseddel:")
+for navn, antall in fartoynavn_funnet.most_common(50):
+    print(f"  {navn!r}: {antall}")
 
 
 rader = list(
@@ -432,20 +447,18 @@ rader.sort(
 
 if breiflabb_treff == 0:
     raise RuntimeError(
-        "Fant ingen Breiflabb-rader. "
-        "Art-filteret må kontrolleres."
+        "Fant ingen Breiflabb-rader."
     )
 
 if sluttseddel_treff == 0:
     raise RuntimeError(
-        "Fant Breiflabb, men ingen sluttsedler. "
-        "Dokumenttypefilteret må kontrolleres."
+        "Fant Breiflabb, men ingen sluttsedler."
     )
 
 if fartoy_treff == 0:
     raise RuntimeError(
-        "Fant Breiflabb-sluttsedler, men ingen av de valgte fartøyene. "
-        "Kontroller registreringsmerkene i loggen."
+        "Fant Breiflabb-sluttsedler, men ingen av de valgte fartøynavnene. "
+        "Kontroller fartøynavnene i loggen."
     )
 
 if not rader:
