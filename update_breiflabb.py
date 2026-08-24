@@ -2,6 +2,7 @@ import csv
 import io
 import urllib.request
 import zipfile
+from collections import Counter
 from datetime import datetime
 
 YEAR = datetime.now().year
@@ -19,10 +20,14 @@ FARTOY = {
 }
 
 ALIASES = {
-    "dokumenttype": [
+    "dokumenttype_kode": [
         "Dokumenttype (kode)",
         "Dokumenttype kode",
+        "Dokumenttypekode",
+    ],
+    "dokumenttype_navn": [
         "Dokumenttype",
+        "Dokumenttype navn",
     ],
     "dokumentnummer": [
         "Dokumentnummer",
@@ -68,6 +73,7 @@ def normaliser(verdi):
     return " ".join(
         (verdi or "")
         .replace("\ufeff", "")
+        .replace("\u00a0", " ")
         .strip()
         .split()
     )
@@ -81,7 +87,6 @@ def finn_kolonne(headers, alternativer, valgfri=False):
 
     for navn in alternativer:
         key = normaliser(navn).casefold()
-
         if key in oppslag:
             return oppslag[key]
 
@@ -108,7 +113,6 @@ def til_tall(verdi):
 
     if "," in s and "." not in s:
         s = s.replace(",", ".")
-
     elif "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
 
@@ -117,13 +121,30 @@ def til_tall(verdi):
 
 def til_versjon(verdi):
     try:
-        return int(
-            float(
-                (verdi or "0").replace(",", ".")
-            )
-        )
+        return int(float((verdi or "0").replace(",", ".")))
     except Exception:
         return 0
+
+
+def er_sluttseddel(row, kodekolonne, navnkolonne):
+    kode = ""
+    navn = ""
+
+    if kodekolonne:
+        kode = normaliser(row.get(kodekolonne, ""))
+
+    if navnkolonne:
+        navn = normaliser(row.get(navnkolonne, ""))
+
+    kode_normalisert = kode.replace(",", ".").strip()
+
+    if kode_normalisert in {"0", "0.0", "00"}:
+        return True
+
+    if navn.casefold() == "sluttseddeldokument":
+        return True
+
+    return False
 
 
 print("Laster ned:", URL)
@@ -182,9 +203,15 @@ with zipfile.ZipFile(
         headers = reader.fieldnames or []
 
         kol = {
-            "dokumenttype": finn_kolonne(
+            "dokumenttype_kode": finn_kolonne(
                 headers,
-                ALIASES["dokumenttype"]
+                ALIASES["dokumenttype_kode"],
+                valgfri=True
+            ),
+            "dokumenttype_navn": finn_kolonne(
+                headers,
+                ALIASES["dokumenttype_navn"],
+                valgfri=True
             ),
             "dokumentnummer": finn_kolonne(
                 headers,
@@ -219,22 +246,26 @@ with zipfile.ZipFile(
 
         print("Kolonner brukt:")
         for navn, kolonnenavn in kol.items():
-            print(navn, "->", kolonnenavn)
+            print(f"  {navn}: {kolonnenavn}")
 
-        siste = {}
-        treff = 0
-
-        for row in reader:
-
-            dokumenttype = normaliser(
-                row.get(
-                    kol["dokumenttype"],
-                    ""
-                )
+        if not kol["dokumenttype_kode"] and not kol["dokumenttype_navn"]:
+            raise RuntimeError(
+                "Fant verken dokumenttypekode eller dokumenttypenavn."
             )
 
-            if dokumenttype != "0":
-                continue
+        total = 0
+        breiflabb_treff = 0
+        sluttseddel_treff = 0
+        fartoy_treff = 0
+
+        artverdier = Counter()
+        dokumenttyper = Counter()
+        fartoymerker = Counter()
+
+        siste = {}
+
+        for row in reader:
+            total += 1
 
             art = normaliser(
                 row.get(
@@ -243,8 +274,44 @@ with zipfile.ZipFile(
                 )
             )
 
+            artverdier[art] += 1
+
             if art.casefold() != "breiflabb":
                 continue
+
+            breiflabb_treff += 1
+
+            kodeverdi = ""
+            navnverdi = ""
+
+            if kol["dokumenttype_kode"]:
+                kodeverdi = normaliser(
+                    row.get(
+                        kol["dokumenttype_kode"],
+                        ""
+                    )
+                )
+
+            if kol["dokumenttype_navn"]:
+                navnverdi = normaliser(
+                    row.get(
+                        kol["dokumenttype_navn"],
+                        ""
+                    )
+                )
+
+            dokumenttyper[
+                f"kode={kodeverdi!r}, navn={navnverdi!r}"
+            ] += 1
+
+            if not er_sluttseddel(
+                row,
+                kol["dokumenttype_kode"],
+                kol["dokumenttype_navn"]
+            ):
+                continue
+
+            sluttseddel_treff += 1
 
             merke = normaliser(
                 row.get(
@@ -253,8 +320,12 @@ with zipfile.ZipFile(
                 )
             ).upper()
 
+            fartoymerker[merke] += 1
+
             if merke not in FARTOY:
                 continue
+
+            fartoy_treff += 1
 
             dokumentnummer = normaliser(
                 row.get(
@@ -269,6 +340,12 @@ with zipfile.ZipFile(
                     ""
                 )
             )
+
+            if not dokumentnummer:
+                continue
+
+            if not linjenummer:
+                continue
 
             if kol["versjon"]:
                 versjon = til_versjon(
@@ -315,12 +392,28 @@ with zipfile.ZipFile(
 
             if (
                 gammel is None
-                or versjon
-                >= gammel["Dokumentversjon"]
+                or versjon >= gammel["Dokumentversjon"]
             ):
                 siste[key] = data
 
-            treff += 1
+
+print()
+print("DIAGNOSTIKK")
+print("-----------")
+print("Totale rader:", total)
+print("Breiflabb-rader:", breiflabb_treff)
+print("Sluttseddel-rader for Breiflabb:", sluttseddel_treff)
+print("Rader på valgte fartøy:", fartoy_treff)
+
+print()
+print("Dokumenttyper for Breiflabb:")
+for verdi, antall in dokumenttyper.most_common(20):
+    print(f"  {verdi}: {antall}")
+
+print()
+print("Registreringsmerker etter Breiflabb + sluttseddel:")
+for merke, antall in fartoymerker.most_common(30):
+    print(f"  {merke!r}: {antall}")
 
 
 rader = list(
@@ -335,6 +428,32 @@ rader.sort(
         r["Linjenummer"],
     )
 )
+
+
+if breiflabb_treff == 0:
+    raise RuntimeError(
+        "Fant ingen Breiflabb-rader. "
+        "Art-filteret må kontrolleres."
+    )
+
+if sluttseddel_treff == 0:
+    raise RuntimeError(
+        "Fant Breiflabb, men ingen sluttsedler. "
+        "Dokumenttypefilteret må kontrolleres."
+    )
+
+if fartoy_treff == 0:
+    raise RuntimeError(
+        "Fant Breiflabb-sluttsedler, men ingen av de valgte fartøyene. "
+        "Kontroller registreringsmerkene i loggen."
+    )
+
+if not rader:
+    raise RuntimeError(
+        "Ingen rader klare for eksport. "
+        "Eksisterende breiflabb_latest.csv blir derfor ikke overskrevet."
+    )
+
 
 felter = [
     "Dokumentnummer",
@@ -379,9 +498,24 @@ with open(
 
         writer.writerow(ut)
 
+
+print()
 print(
-    f"Ferdig. Fant {treff} "
-    f"breiflabb-linjer og lagret "
-    f"{len(rader)} siste "
-    f"dokumentversjoner i {OUTPUT}"
+    f"Ferdig. Lagret {len(rader)} "
+    f"siste dokumentlinjer i {OUTPUT}"
 )
+
+print()
+print("Fordeling på fartøy:")
+
+fordeling = Counter(
+    r["Fartøynavn"]
+    for r in rader
+)
+
+for fartoy, antall in sorted(
+    fordeling.items()
+):
+    print(
+        f"  {fartoy}: {antall} linjer"
+    )
