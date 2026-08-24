@@ -3,6 +3,12 @@ name: Oppdater breiflabb-data
 on:
   workflow_dispatch:
 
+  schedule:
+    - cron: "30 3 * * *"
+
+permissions:
+  contents: write
+
 jobs:
   hent-data:
     runs-on: ubuntu-latest
@@ -16,5 +22,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Kjør test
+      - name: Hent og filtrer fangstdata
         run: python update_breiflabb.py
+
+      - name: Lagre ny breiflabb-fil
+        run: |
+          git config user.name "breiflabb-bot"
+          git config user.email "breiflabb-bot@users.noreply.github.com"
+          git add breiflabb_latest.csv
+          if git diff --cached --quiet; then
+            echo "Ingen endringer i fangstdata"
+          else
+            git commit -m "Oppdater breiflabb-data"
+            git push
+          fi
