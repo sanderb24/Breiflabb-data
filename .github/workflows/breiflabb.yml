@@ -4,14 +4,20 @@ on:
   workflow_dispatch:
 
   schedule:
-    - cron: "30 3 * * *"
+    # UTC. Norsk sommertid = +2 timer
+    - cron: "20 3,6,9,12,15,18 * * *"
 
 permissions:
   contents: write
 
+concurrency:
+  group: breiflabb-data
+  cancel-in-progress: false
+
 jobs:
   hent-data:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Hent repo
@@ -29,7 +35,9 @@ jobs:
         run: |
           git config user.name "breiflabb-bot"
           git config user.email "breiflabb-bot@users.noreply.github.com"
+
           git add breiflabb_latest.csv
+
           if git diff --cached --quiet; then
             echo "Ingen endringer i fangstdata"
           else
